@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Taller de Etiquetas Escolares</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700&family=Inter:wght@400;500;600&family=Fredoka:wght@500;600&family=Caveat:wght@600;700&family=Bangers&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="estilos.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>Taller de <span>Etiquetas</span></h1>
+
+  <div class="dropdown" id="ddCanvas">
+    <button id="btnDdCanvas">Lienzo ▾</button>
+    <div class="dropdown-panel" id="panelCanvas">
+      <fieldset>
+        <legend>Tamaño</legend>
+        <div class="unitgrp">
+          <button data-unit="px" class="toggled" id="unitPx">px</button>
+          <button data-unit="cm" id="unitCm">cm</button>
+          <button data-unit="in" id="unitIn">in</button>
+        </div>
+        <div class="row">
+          <label class="field">Ancho<input type="number" id="sizeW" value="400" min="10"></label>
+          <label class="field">Alto<input type="number" id="sizeH" value="250" min="10"></label>
+        </div>
+        <label class="field" id="dpiField" style="display:none">Resolución (DPI)
+          <input type="number" id="dpi" value="300" min="72" max="1200">
+        </label>
+        <p class="hint" id="pxPreview"></p>
+        <div style="height:8px"></div>
+        <button class="accent block" id="btnApplySize">Aplicar tamaño</button>
+      </fieldset>
+      <fieldset>
+        <legend>Color de fondo</legend>
+        <div id="canvasBgCtl"></div>
+      </fieldset>
+      <fieldset>
+        <legend>Borde del lienzo</legend>
+        <label class="field">Grosor (px)<input type="number" id="borderW" value="0" min="0"></label>
+        <div id="borderColorCtl"></div>
+      </fieldset>
+    </div>
+  </div>
+
+  <div class="dropdown" id="ddInsert">
+    <button id="btnDdInsert">Insertar ▾</button>
+    <div class="dropdown-panel" id="panelInsert">
+      <fieldset>
+        <legend>Agregar elemento</legend>
+        <div class="row" style="margin-bottom:8px">
+          <button class="primary block" id="btnAddText">+ Texto</button>
+        </div>
+        <div class="row">
+          <label class="fileLabel" for="fileInput" style="flex:1">+ Imagen</label>
+        </div>
+        <input type="file" id="fileInput" accept="image/*" multiple class="visually-hidden-file">
+        <p class="hint">También puedes arrastrar imágenes desde tu explorador de archivos, o copiar una imagen y pegarla aquí con Ctrl+V.</p>
+      </fieldset>
+    </div>
+  </div>
+
+  <div class="sep"></div>
+  <div class="dropdown" id="ddBatch">
+    <button id="btnDdBatch">🔀 Lote ▾</button>
+    <div class="dropdown-panel" id="panelBatch" style="width:320px">
+      <fieldset>
+        <legend>Variables detectadas</legend>
+        <p class="hint" id="varsDetected">Escribe @NombreVariable en un texto del diseño (ej: @Alumno) y aparecerá aquí.</p>
+      </fieldset>
+      <fieldset>
+        <legend>Listas de datos</legend>
+        <div id="dataListsContainer"></div>
+        <button type="button" class="block small" id="btnNewList" style="margin-top:6px">+ Nueva lista</button>
+      </fieldset>
+      <fieldset>
+        <legend>Generar etiquetas</legend>
+        <div id="batchCombineContainer"></div>
+        <p class="hint" id="batchPreviewCount"></p>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="small block" id="btnBatchPreview" style="margin-top:8px">👁 Vista previa (con flechas)</button>
+        </div>
+        <button type="button" class="accent block" id="btnBatchExport" style="margin-top:8px" disabled>Exportar ZIP</button>
+      </fieldset>
+    </div>
+  </div>
+
+  <div class="sep"></div>
+  <button class="icon" id="btnForward" title="Traer adelante">↑</button>
+  <button class="icon" id="btnBackward" title="Enviar atrás">↓</button>
+  <button class="icon danger" id="btnDelete" title="Eliminar seleccionado">🗑</button>
+  <div class="sep"></div>
+  <button id="btnSaveTemplate" title="Guardar diseño editable (.json)">💾 Plantilla</button>
+  <button id="btnLoadTemplate" title="Abrir un diseño guardado">📂 Abrir</button>
+  <input type="file" id="templateFileInput" accept=".json,application/json" style="display:none">
+  <div class="sep"></div>
+  <button class="accent" id="btnDownload">⬇ PNG</button>
+  <button class="danger" id="btnClear">Vaciar</button>
+</header>
+
+<section class="workspace" id="workspace">
+  <div id="canvasWrap">
+    <canvas id="labelCanvas" width="400" height="250"></canvas>
+  </div>
+  <div class="dropmsg">Suelta la imagen aquí</div>
+  <div id="zoomBar">
+    <button type="button" id="zoomOut" title="Alejar">−</button>
+    <span id="zoomLabel">100%</span>
+    <button type="button" id="zoomIn" title="Acercar">+</button>
+    <button type="button" class="small" id="zoomReset" title="Restablecer zoom">Ajustar</button>
+  </div>
+  <div id="previewBar" style="display:none">
+    <button type="button" id="prevPreviewBtn" title="Combinación anterior">◀</button>
+    <span id="previewIndexLabel">1 / 1</span>
+    <button type="button" id="nextPreviewBtn" title="Siguiente combinación">▶</button>
+    <button type="button" class="small" id="exitPreviewBtn" title="Salir de la vista previa">✕ Salir</button>
+  </div>
+</section>
+
+<div id="floatBar"></div>
+<div id="popover"></div>
+
+<script src="script.js"></script>
+</body>
+</html>
