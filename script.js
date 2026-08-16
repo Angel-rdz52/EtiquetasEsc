@@ -46,6 +46,78 @@
 
   let guide = {x:null, y:null};
 
+  // ================= portapapeles / historial (deshacer-rehacer) =================
+  function cloneObjectData(o){
+    const plain = Object.assign({}, o);
+    if(o.type==='image') plain.img = undefined;
+    const cloned = JSON.parse(JSON.stringify(plain));
+    if(o.type==='image') cloned.img = o.img;
+    return cloned;
+  }
+  let objectClipboard = null;
+  let history = [];
+  let future = [];
+  const HISTORY_LIMIT = 5;
+  let pendingSnapshot = null;
+  function snapshotState(){
+    return { objects: objects.map(o=>cloneObjectData(o)), canvasWidth: canvas.width, canvasHeight: canvas.height };
+  }
+  function pushHistory(){
+    history.push(snapshotState());
+    if(history.length>HISTORY_LIMIT) history.shift();
+    future = [];
+    updateUndoRedoButtons();
+  }
+  function applyState(state){
+    objects = state.objects.map(o=>cloneObjectData(o));
+    canvas.width = state.canvasWidth; canvas.height = state.canvasHeight;
+    selectedId = null; closePopover(); hideFloatBar();
+    render();
+    updateUndoRedoButtons();
+  }
+  function undo(){
+    if(history.length===0) return;
+    future.push(snapshotState());
+    if(future.length>HISTORY_LIMIT) future.shift();
+    applyState(history.pop());
+  }
+  function redo(){
+    if(future.length===0) return;
+    history.push(snapshotState());
+    if(history.length>HISTORY_LIMIT) history.shift();
+    applyState(future.pop());
+  }
+  function updateUndoRedoButtons(){
+    const u=document.getElementById('btnUndo'), r=document.getElementById('btnRedo');
+    if(u) u.disabled = history.length===0;
+    if(r) r.disabled = future.length===0;
+  }
+  function copySelectedObject(){
+    const o = objects.find(x=>x.id===selectedId);
+    if(!o) return;
+    objectClipboard = cloneObjectData(o);
+  }
+  function cutSelectedObject(){
+    const o = objects.find(x=>x.id===selectedId);
+    if(!o) return;
+    pushHistory();
+    objectClipboard = cloneObjectData(o);
+    objects = objects.filter(x=>x.id!==selectedId);
+    selectedId = null;
+    closePopover(); hideFloatBar(); render();
+  }
+  function pasteObject(){
+    if(!objectClipboard) return;
+    pushHistory();
+    const copy = cloneObjectData(objectClipboard);
+    copy.id = nextId++;
+    copy.x = (copy.x||0) + 18;
+    copy.y = (copy.y||0) + 18;
+    objects.push(copy);
+    selectedId = copy.id;
+    render();
+  }
+
   // ================= variables y lotes =================
   let dataLists = [];
   let nextListId = 1;
@@ -66,10 +138,39 @@
     });
     return Array.from(set);
   }
-  function substituteVars(content, dataRow){
-    return content.replace(/@([A-Za-zÀ-ÖØ-öø-ÿ0-9_]+)/g, (m,name)=>
-      Object.prototype.hasOwnProperty.call(dataRow,name) ? String(dataRow[name]) : m
-    );
+  // sustituye variables Y reubica el formato (negrita/cursiva/subrayado/tachado) que caía sobre ellas,
+  // para que si seleccionaste exactamente "@Variable" el formato cubra todo el valor sustituido, sea cual sea su longitud.
+  function substituteWithRanges(content, richRanges, dataRow){
+    const tokenRegex = /@([A-Za-zÀ-ÖØ-öø-ÿ0-9_]+)/g;
+    const tokens = [];
+    let m;
+    while((m = tokenRegex.exec(content))){
+      tokens.push({ name:m[1], start:m.index, end:m.index+m[0].length });
+    }
+    let output='', cursor=0;
+    const tokenNewSpans = [];
+    tokens.forEach(tok=>{
+      output += content.slice(cursor, tok.start);
+      const value = Object.prototype.hasOwnProperty.call(dataRow, tok.name) ? String(dataRow[tok.name]) : content.slice(tok.start, tok.end);
+      const newStart = output.length;
+      output += value;
+      tokenNewSpans.push({ start:newStart, end:output.length });
+      cursor = tok.end;
+    });
+    output += content.slice(cursor);
+
+    const newRanges = (richRanges||[]).map(r=>{
+      const tokIdx = tokens.findIndex(t=> t.start===r.start && t.end===r.end);
+      if(tokIdx>=0){
+        const span = tokenNewSpans[tokIdx];
+        return Object.assign({}, r, { start:span.start, end:span.end });
+      }
+      // sin coincidencia exacta con una variable: desplaza el rango según cuánto cambió el largo antes de él
+      let shift = 0;
+      tokens.forEach((t,i)=>{ if(t.end<=r.start) shift += (tokenNewSpans[i].end-tokenNewSpans[i].start) - (t.end-t.start); });
+      return Object.assign({}, r, { start:Math.max(0,r.start+shift), end:Math.max(0,r.end+shift) });
+    });
+    return { content: output, richRanges: newRanges };
   }
   function getSelectedLists(){
     const ids = Array.from(document.querySelectorAll('.combineChk:checked')).map(c=>parseInt(c.dataset.id));
@@ -103,12 +204,14 @@
   function applyPreviewRow(dataRow){
     if(!batchPreviewActive){
       previewOriginals = new Map();
-      objects.forEach(o=>{ if(o.type==='text') previewOriginals.set(o.id, o.content); });
+      objects.forEach(o=>{ if(o.type==='text') previewOriginals.set(o.id, { content:o.content, richRanges:(o.richRanges||[]).map(r=>Object.assign({},r)) }); });
     }
     objects.forEach(o=>{
       if(o.type==='text'){
-        const base = previewOriginals.has(o.id) ? previewOriginals.get(o.id) : o.content;
-        o.content = substituteVars(base, dataRow);
+        const base = previewOriginals.has(o.id) ? previewOriginals.get(o.id) : { content:o.content, richRanges:o.richRanges };
+        const result = substituteWithRanges(base.content, base.richRanges, dataRow);
+        o.content = result.content;
+        o.richRanges = result.richRanges;
       }
     });
     batchPreviewActive = true;
@@ -116,7 +219,12 @@
   }
   function restoreBatchPreview(){
     if(!batchPreviewActive || !previewOriginals) return;
-    objects.forEach(o=>{ if(o.type==='text' && previewOriginals.has(o.id)) o.content = previewOriginals.get(o.id); });
+    objects.forEach(o=>{
+      if(o.type==='text' && previewOriginals.has(o.id)){
+        const base = previewOriginals.get(o.id);
+        o.content = base.content; o.richRanges = base.richRanges;
+      }
+    });
     batchPreviewActive = false; previewOriginals = null;
     render();
   }
@@ -470,14 +578,20 @@
 
     const prevSel = selectedId; selectedId=null; guide={x:null,y:null};
     const originals = new Map();
-    objects.forEach(o=>{ if(o.type==='text') originals.set(o.id, o.content); });
+    objects.forEach(o=>{ if(o.type==='text') originals.set(o.id, { content:o.content, richRanges:(o.richRanges||[]).map(r=>Object.assign({},r)) }); });
 
     const zip = new JSZip();
     const usedNames = new Set();
     for(let i=0;i<rows.length;i++){
       btn.textContent = `Generando ${i+1}/${rows.length}…`;
       const dataRow = rows[i];
-      objects.forEach(o=>{ if(o.type==='text') o.content = substituteVars(originals.get(o.id), dataRow); });
+      objects.forEach(o=>{
+        if(o.type==='text'){
+          const base = originals.get(o.id);
+          const result = substituteWithRanges(base.content, base.richRanges, dataRow);
+          o.content = result.content; o.richRanges = result.richRanges;
+        }
+      });
       render();
       await new Promise(r=>setTimeout(r,0));
       const blob = await new Promise(res=> canvas.toBlob(res, 'image/png'));
@@ -486,7 +600,12 @@
       usedNames.add(finalName);
       zip.file(`${finalName}.png`, blob);
     }
-    objects.forEach(o=>{ if(o.type==='text' && originals.has(o.id)) o.content = originals.get(o.id); });
+    objects.forEach(o=>{
+      if(o.type==='text' && originals.has(o.id)){
+        const base = originals.get(o.id);
+        o.content = base.content; o.richRanges = base.richRanges;
+      }
+    });
     selectedId = prevSel; batchPreviewActive=false; previewOriginals=null; render();
     previewBar.style.display='none'; previewRows=[]; previewIndex=0;
 
@@ -542,6 +661,7 @@
     const h = parseFloat(document.getElementById('sizeH').value)||0;
     const pw = toPx(w,unit,dpi), ph = toPx(h,unit,dpi);
     if(pw<10 || ph<10){ alert('El tamaño es demasiado pequeño.'); return; }
+    pushHistory();
     canvas.width=pw; canvas.height=ph;
     render(); closeAllDropdowns();
   });
@@ -549,6 +669,7 @@
 
   // ================= object factories =================
   function addText(){
+    pushHistory();
     const obj = {
       id: nextId++, type:'text',
       x: canvas.width*0.2, y: canvas.height*0.35,
@@ -568,6 +689,7 @@
     render(); closeAllDropdowns();
   }
   function addImageObj(img, naturalW, naturalH){
+    pushHistory();
     const maxW = canvas.width*0.5;
     let w=naturalW, h=naturalH;
     if(w>maxW){ const s=maxW/w; w*=s; h*=s; }
@@ -634,6 +756,7 @@
   document.getElementById('btnDelete').addEventListener('click', deleteSelected);
   function deleteSelected(){
     if(selectedId==null) return;
+    pushHistory();
     objects = objects.filter(o=>o.id!==selectedId);
     selectedId = null;
     render(); closePopover(); hideFloatBar();
@@ -641,18 +764,39 @@
   document.getElementById('btnForward').addEventListener('click', ()=>{
     const i = objects.findIndex(o=>o.id===selectedId);
     if(i<0 || i===objects.length-1) return;
+    pushHistory();
     [objects[i],objects[i+1]]=[objects[i+1],objects[i]]; render();
   });
   document.getElementById('btnBackward').addEventListener('click', ()=>{
     const i = objects.findIndex(o=>o.id===selectedId);
     if(i<=0) return;
+    pushHistory();
     [objects[i],objects[i-1]]=[objects[i-1],objects[i]]; render();
   });
   document.getElementById('btnClear').addEventListener('click', ()=>{
     if(objects.length===0) return;
     if(confirm('¿Vaciar todo el lienzo? Esta acción no se puede deshacer.')){
+      pushHistory();
       objects=[]; selectedId=null; render(); closePopover(); hideFloatBar();
     }
+  });
+
+  document.getElementById('btnUndo').addEventListener('click', undo);
+  document.getElementById('btnRedo').addEventListener('click', redo);
+  document.getElementById('btnCopy').addEventListener('click', copySelectedObject);
+  document.getElementById('btnCut').addEventListener('click', cutSelectedObject);
+  document.getElementById('btnPaste').addEventListener('click', pasteObject);
+  updateUndoRedoButtons();
+
+  window.addEventListener('keydown', e=>{
+    const tag = document.activeElement && document.activeElement.tagName;
+    if(tag==='INPUT' || tag==='TEXTAREA') return; // deja que el navegador maneje copiar/pegar texto normal
+    const key = e.key.toLowerCase();
+    if((e.ctrlKey||e.metaKey) && key==='z' && !e.shiftKey){ e.preventDefault(); undo(); }
+    else if((e.ctrlKey||e.metaKey) && (key==='y' || (key==='z' && e.shiftKey))){ e.preventDefault(); redo(); }
+    else if((e.ctrlKey||e.metaKey) && key==='c'){ e.preventDefault(); copySelectedObject(); }
+    else if((e.ctrlKey||e.metaKey) && key==='x'){ e.preventDefault(); cutSelectedObject(); }
+    else if((e.ctrlKey||e.metaKey) && key==='v'){ e.preventDefault(); pasteObject(); }
   });
   document.getElementById('btnDownload').addEventListener('click', ()=>{
     const prevSel = selectedId;
@@ -1065,17 +1209,20 @@
       const cx=sel.x+sel.w/2, cy=sel.y+sel.h/2;
       dragMode='rotate';
       objStart = { cx, cy, startAngle: Math.atan2(y-cy,x-cx), startRotation: sel.rotation||0 };
+      pendingSnapshot = snapshotState();
       return;
     }
     if(sel && nearHandle(sel,x,y)){
       dragMode='resize'; dragStart={x,y};
       objStart={w:sel.w,h:sel.h,x:sel.x,y:sel.y,rotation:sel.rotation||0,cx:sel.x+sel.w/2,cy:sel.y+sel.h/2};
+      pendingSnapshot = snapshotState();
       return;
     }
     const hit = hitTest(x,y);
     if(hit){
       selectedId = hit.id;
       dragMode='move'; dragStart={x,y}; objStart={x:hit.x,y:hit.y};
+      pendingSnapshot = snapshotState();
       moved=false;
       pressTimer = setTimeout(()=>{
         if(!moved){ dragMode=null; openPopover(clientX, clientY, hit); }
@@ -1113,7 +1260,17 @@
   }
   function pointerUp(){
     if(pressTimer){ clearTimeout(pressTimer); pressTimer=null; }
+    if(dragMode && moved && pendingSnapshot) commitPendingSnapshot();
+    else pendingSnapshot = null;
     dragMode=null; guide={x:null,y:null}; render();
+  }
+  function commitPendingSnapshot(){
+    if(!pendingSnapshot) return;
+    history.push(pendingSnapshot);
+    if(history.length>HISTORY_LIMIT) history.shift();
+    future = [];
+    updateUndoRedoButtons();
+    pendingSnapshot = null;
   }
   function touchDist(t1,t2){ return Math.hypot(t2.clientX-t1.clientX, t2.clientY-t1.clientY); }
   function touchAngle(t1,t2){ return Math.atan2(t2.clientY-t1.clientY, t2.clientX-t1.clientX); }
@@ -1138,6 +1295,7 @@
       }
       if(overSelected){
         pinchState = { startDist: touchDist(t1,t2), startAngle: touchAngle(t1,t2), startW: sel.w, startH: sel.h, startRotation: sel.rotation||0 };
+        pendingSnapshot = snapshotState();
       } else {
         startViewPinch(t1,t2);
       }
@@ -1170,7 +1328,10 @@
     const t=e.touches[0]; pointerMove(t.clientX,t.clientY);
   }, {passive:false});
   window.addEventListener('touchend', e=>{
-    if(e.touches.length<2){ pinchState=null; viewPinchState=null; }
+    if(e.touches.length<2){
+      if(pinchState && pendingSnapshot) commitPendingSnapshot();
+      pinchState=null; viewPinchState=null;
+    }
     pointerUp();
   });
 
@@ -1314,6 +1475,7 @@
   }
 
   function openPopover(clientX, clientY, sel){
+    pushHistory();
     popover.innerHTML = buildPopoverContent(sel);
     popover.style.display='block';
     positionPopoverSmart(sel);
@@ -1333,7 +1495,7 @@
     if(sel.type==='text'){
       body = `
         <label class="field">Contenido (admite varias líneas)<textarea id="p_content">${escapeHtml(sel.content)}</textarea></label>
-        <p class="hint">Selecciona una palabra o frase arriba (tocando y arrastrando sobre el texto) y toca un botón para darle formato solo a esa parte.</p>
+        <p class="hint">Selecciona una palabra o frase arriba para aplicar el formato solo a esa parte. Si no seleccionas nada, se aplica a todo el texto.</p>
         <div class="richRow">
           <button type="button" id="p_rich_bold" title="Negrita a la selección"><b>N</b></button>
           <button type="button" id="p_rich_italic" title="Cursiva a la selección"><i>K</i></button>
@@ -1488,25 +1650,37 @@
       byId('p_content').addEventListener('input', e=>{ sel.content=e.target.value; render(); });
       const contentTa = byId('p_content');
       function applyRich(prop, forcedValue){
+        const hasSel = contentTa.selectionStart !== contentTa.selectionEnd;
         const start = contentTa.selectionStart, end = contentTa.selectionEnd;
-        if(start===end){ contentTa.focus(); return; }
+        if(!hasSel && (prop==='bold' || prop==='italic')){
+          sel[prop] = forcedValue!=null ? forcedValue : !sel[prop];
+          render();
+          return;
+        }
+        const s = hasSel ? start : 0;
+        const e = hasSel ? end : sel.content.length;
         sel.richRanges = sel.richRanges || [];
-        const value = forcedValue!=null ? forcedValue : !styleAt(sel,start)[prop];
-        sel.richRanges.push({ start, end, [prop]: value });
+        const value = forcedValue!=null ? forcedValue : !styleAt(sel,s)[prop];
+        sel.richRanges.push({ start:s, end:e, [prop]: value });
         render();
-        contentTa.focus(); contentTa.setSelectionRange(start,end);
+        contentTa.focus(); if(hasSel) contentTa.setSelectionRange(start,end);
       }
       byId('p_rich_bold').addEventListener('click', ()=> applyRich('bold'));
       byId('p_rich_italic').addEventListener('click', ()=> applyRich('italic'));
       byId('p_rich_underline').addEventListener('click', ()=> applyRich('underline'));
       byId('p_rich_strike').addEventListener('click', ()=> applyRich('strike'));
       byId('p_rich_clear').addEventListener('click', ()=>{
+        const hasSel = contentTa.selectionStart !== contentTa.selectionEnd;
         const start = contentTa.selectionStart, end = contentTa.selectionEnd;
-        if(start===end) return;
         sel.richRanges = sel.richRanges || [];
-        sel.richRanges.push({start, end, bold:false, italic:false, underline:false, strike:false});
+        if(!hasSel){
+          sel.richRanges = [];
+          sel.bold = false; sel.italic = false;
+        } else {
+          sel.richRanges.push({start, end, bold:false, italic:false, underline:false, strike:false});
+        }
         render();
-        contentTa.focus(); contentTa.setSelectionRange(start,end);
+        contentTa.focus(); if(hasSel) contentTa.setSelectionRange(start,end);
       });
       byId('p_font').addEventListener('change', e=>{ sel.fontFamily=e.target.value; render(); });
       byId('p_size').addEventListener('input', e=>{ sel.fontSize=parseInt(e.target.value)||12; render(); });
@@ -1569,3 +1743,4 @@
 
   render();
 })();
+
