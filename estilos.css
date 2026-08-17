@@ -23,13 +23,18 @@
   header h1{font-family:'Poppins',sans-serif;font-size:14px;margin:0 8px 0 2px;white-space:nowrap;}
   header h1 span{color:var(--yellow);}
   .sep{width:1px;align-self:stretch;background:var(--line);margin:0 3px;}
-  button{
+  button, .fileBtn{
     font-family:'Inter',sans-serif;font-weight:600;font-size:12.5px;border:1px solid var(--line);
     background:var(--bg-panel-2);color:var(--ink);padding:9px 11px;border-radius:8px;cursor:pointer;
     transition:filter .12s ease, transform .05s ease;white-space:nowrap;min-height:38px;
+    display:inline-flex;align-items:center;
   }
   button:hover{filter:brightness(1.18);}
   button:active{transform:translateY(1px);}
+  button:disabled{opacity:.35;filter:none;cursor:not-allowed;pointer-events:none;}
+  .fileBtn:hover{filter:brightness(1.18);}
+  .fileBtn:active{transform:translateY(1px);}
+  .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
   button.primary{background:var(--yellow);color:#22301F;border-color:transparent;}
   button.accent{background:var(--teal);color:#0F2624;border-color:transparent;}
   button.danger{background:transparent;color:var(--coral);border-color:var(--coral);}
@@ -110,17 +115,17 @@
   }
 
   #zoomBar{
-    position:absolute;right:14px;bottom:14px;display:flex;align-items:center;gap:6px;
+    position:fixed;right:14px;bottom:14px;display:flex;align-items:center;gap:6px;
     background:var(--bg-panel-2);border:1px solid var(--line);border-radius:10px;padding:6px;
-    box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:45;
+    box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:55;
   }
   #zoomBar button{padding:8px 12px;font-size:15px;font-weight:700;min-height:34px;}
   #zoomLabel{font-size:11.5px;color:var(--muted);min-width:38px;text-align:center;}
 
   #previewBar{
-    position:absolute;left:14px;bottom:14px;display:flex;align-items:center;gap:6px;
+    position:fixed;left:14px;bottom:14px;display:flex;align-items:center;gap:6px;
     background:var(--bg-panel-2);border:1px solid var(--yellow);border-radius:10px;padding:6px;
-    box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:45;
+    box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:55;
   }
   #previewBar button{padding:8px 12px;font-size:15px;font-weight:700;min-height:34px;}
   #previewIndexLabel{font-size:11.5px;color:var(--muted);min-width:54px;text-align:center;}
@@ -135,10 +140,12 @@
   .workspace.dragover .dropmsg{display:flex;}
 
   #floatBar{
-    position:fixed;display:none;gap:4px;background:var(--bg-panel-2);border:1px solid var(--line);
+    position:fixed;display:none;gap:4px;align-items:center;background:var(--bg-panel-2);border:1px solid var(--line);
     border-radius:9px;padding:5px;box-shadow:0 8px 22px rgba(0,0,0,.35);z-index:60;
   }
   #floatBar button{padding:8px 10px;font-size:13px;min-height:36px;}
+  .fbGrip{cursor:grab;padding:6px 5px;color:var(--muted);font-size:15px;user-select:none;touch-action:none;display:flex;align-items:center;letter-spacing:-1px;}
+  .fbGrip.dragging{cursor:grabbing;}
 
   #popover{
     position:fixed;display:none;background:var(--bg-panel-2);border:1px solid var(--line);
