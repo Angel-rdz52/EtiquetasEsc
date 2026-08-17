@@ -340,16 +340,41 @@
   }
 
   // ================= dropdown menus =================
+  function positionDropdownPanel(btn, panel){
+    const btnRect = btn.getBoundingClientRect();
+    const margin = 8;
+    if(!panel.dataset.naturalWidth){
+      panel.dataset.naturalWidth = panel.offsetWidth || 270;
+    }
+    const naturalWidth = parseFloat(panel.dataset.naturalWidth) || 270;
+    const pw = Math.min(naturalWidth, window.innerWidth - margin*2);
+    panel.style.width = pw + 'px';
+    const ph = Math.min(panel.scrollHeight, window.innerHeight - margin*2);
+    let left = Math.min(Math.max(btnRect.left, margin), window.innerWidth - pw - margin);
+    let top = btnRect.bottom + 6;
+    if(top + ph > window.innerHeight - margin) top = Math.max(margin, window.innerHeight - ph - margin);
+    panel.style.position = 'fixed';
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+    panel.style.right = 'auto';
+  }
   function setupDropdown(btnId, panelId){
     const btn = document.getElementById(btnId), panel = document.getElementById(panelId);
     btn.addEventListener('click', e=>{
       e.stopPropagation();
       const wasOpen = panel.classList.contains('open');
       closeAllDropdowns();
-      if(!wasOpen) panel.classList.add('open');
+      if(!wasOpen){ panel.classList.add('open'); positionDropdownPanel(btn, panel); }
     });
     panel.addEventListener('click', e=> e.stopPropagation());
   }
+  window.addEventListener('resize', ()=>{
+    const openPanel = document.querySelector('.dropdown-panel.open');
+    if(openPanel){
+      const btn = openPanel.previousElementSibling;
+      if(btn) positionDropdownPanel(btn, openPanel);
+    }
+  });
   function closeAllDropdowns(){ document.querySelectorAll('.dropdown-panel').forEach(p=>p.classList.remove('open')); }
   setupDropdown('btnDdCanvas','panelCanvas');
   setupDropdown('btnDdInsert','panelInsert');
@@ -572,6 +597,11 @@
     if(rows.length===0){ alert('No hay filas para generar.'); return; }
     if(typeof JSZip==='undefined'){ alert('No se pudo cargar la librería para crear el ZIP. Revisa tu conexión a internet e inténtalo de nuevo.'); return; }
 
+    // si quedó una vista previa activa (con texto ya sustituido), restaurar la plantilla original
+    // ANTES de capturar "originals" — si no, se exportaría el mismo texto sustituido repetido en todo el lote.
+    if(batchPreviewActive) restoreBatchPreview();
+    previewBar.style.display='none'; previewRows=[]; previewIndex=0;
+
     const btn = document.getElementById('btnBatchExport');
     const origLabel = btn.textContent;
     btn.disabled = true;
@@ -665,6 +695,14 @@
     canvas.width=pw; canvas.height=ph;
     render(); closeAllDropdowns();
   });
+  document.getElementById('btnAutoSizeAll').addEventListener('click', ()=>{
+    const texts = objects.filter(o=>o.type==='text');
+    if(texts.length===0) return;
+    pushHistory();
+    texts.forEach(o=>{ o.autoSize = true; });
+    render();
+    closeAllDropdowns();
+  });
   document.getElementById('borderW').addEventListener('input', e=>{ borderW=parseInt(e.target.value)||0; render(); });
 
   // ================= object factories =================
@@ -676,6 +714,7 @@
       w: Math.min(220, canvas.width*0.6), h: 60,
       content:'Nombre del alumno',
       richRanges: [],
+      autoSize: true,
       fontFamily:'Poppins', fontSize:28,
       color:{type:'solid',hex:'#1B2A28'},
       bold:true, italic:false, align:'center', opacity:100,
@@ -876,7 +915,6 @@
 
     render();
   }
-  document.getElementById('btnLoadTemplate').addEventListener('click', ()=> document.getElementById('templateFileInput').click());
   document.getElementById('templateFileInput').addEventListener('change', e=>{
     const file = e.target.files[0];
     e.target.value = '';
@@ -905,7 +943,24 @@
     return s;
   }
   function fontFor(o, st){ return `${st.italic?'italic':'normal'} ${st.bold?'700':'400'} ${o.fontSize}px "${o.fontFamily}"`; }
-  function buildWrappedLines(ctxRef, text, maxWidth){
+  function measureRichWidth(ctxRef, o, text, startOffset){
+    if(text.length===0) return 0;
+    let w = 0, i = 0;
+    while(i<text.length){
+      const st = styleAt(o, startOffset+i);
+      let j = i+1;
+      while(j<text.length){
+        const st2 = styleAt(o, startOffset+j);
+        if(st2.bold!==st.bold || st2.italic!==st.italic) break;
+        j++;
+      }
+      ctxRef.font = fontFor(o, st);
+      w += ctxRef.measureText(text.slice(i,j)).width;
+      i = j;
+    }
+    return w;
+  }
+  function buildWrappedLines(ctxRef, o, text, maxWidth){
     const paragraphs = text.split(/\r\n|\r|\n/);
     const lines = [];
     let offset = 0;
@@ -918,7 +973,7 @@
         words.forEach(w=>{
           const wordStart = pos;
           const test = line ? line+' '+w : w;
-          if(ctxRef.measureText(test).width > maxWidth && line){
+          if(measureRichWidth(ctxRef, o, test, lineStartOffset) > maxWidth && line){
             lines.push({text:line, start:lineStartOffset});
             line = w; lineStartOffset = wordStart;
           } else { line = test; }
@@ -941,9 +996,37 @@
     if(runs.length===0) runs.push({text:'', bold:!!o.bold, italic:!!o.italic, underline:false, strike:false});
     return runs;
   }
+  // ajusta w/h del cuadro de texto al contenido real (sin forzar saltos de línea automáticos),
+  // manteniendo el centro del objeto fijo para que no "salte" al redimensionarse.
+  function computeAutoSize(o){
+    if(o.textShape && o.textShape!=='recta') return; // no aplica a texto curvo
+    const rawLines = o.content.split(/\r\n|\r|\n/);
+    let offset = 0;
+    const lineObjs = rawLines.map(text=>{ const lo = {text, start:offset}; offset += text.length+1; return lo; });
+    let maxWidth = 0;
+    lineObjs.forEach(line=>{
+      const runs = lineRuns(o, line);
+      let w = 0;
+      runs.forEach(r=>{ ctx.font = fontFor(o,r); w += ctx.measureText(r.text).width; });
+      if(w>maxWidth) maxWidth = w;
+    });
+    const lineHeight = o.fontSize*1.15;
+    const strokeExtra = o.strokeEnabled ? (o.strokeWidth||0) : 0;
+    const padX = 26 + strokeExtra*2, padY = 20 + strokeExtra*2;
+    const newW = Math.max(40, Math.ceil(maxWidth + padX));
+    const newH = Math.max(28, Math.ceil(lineObjs.length*lineHeight + padY));
+    // el borde que se mantiene fijo depende de la alineación: así, textos alineados a la
+    // izquierda/derecha crecen solo hacia un lado (no descuadran el inicio del texto al sustituir variables)
+    let newX;
+    if(o.align==='left') newX = o.x;
+    else if(o.align==='right') newX = o.x + o.w - newW;
+    else newX = o.x + o.w/2 - newW/2;
+    const cy = o.y + o.h/2;
+    o.w = newW; o.h = newH;
+    o.x = newX; o.y = cy - o.h/2;
+  }
   function drawWrappedRichText(ctxRef,o,x,y,maxWidth,lineHeight,fillStyle,strokeStyleStr){
-    ctxRef.font = fontFor(o, {bold:o.bold, italic:o.italic});
-    const lines = buildWrappedLines(ctxRef, o.content, maxWidth);
+    const lines = buildWrappedLines(ctxRef, o, o.content, maxWidth);
     const totalH = lines.length*lineHeight;
     let startY = y - totalH/2 + lineHeight/2;
     lines.forEach((line,li)=>{
@@ -1061,17 +1144,19 @@
         const cx=o.x+o.w/2, cy=o.y+o.h/2;
         ctx.translate(cx,cy); ctx.rotate((o.rotation||0)*Math.PI/180); ctx.translate(-cx,-cy);
       }
-      if(o.type==='text') drawTextObj(o); else drawImageObj(o);
+      if(o.type==='text'){ if(o.autoSize) computeAutoSize(o); drawTextObj(o); } else drawImageObj(o);
       if(o.id===selectedId){
         ctx.save();
         ctx.strokeStyle='#4FBDBA'; ctx.lineWidth=2; ctx.setLineDash([6,4]);
         ctx.strokeRect(o.x,o.y,o.w,o.h);
         ctx.setLineDash([]);
-        // resize handle (bottom-right, enlarged for touch)
-        ctx.fillStyle='#4FBDBA';
-        ctx.fillRect(o.x+o.w-11, o.y+o.h-11, 22, 22);
-        ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
-        ctx.strokeRect(o.x+o.w-11, o.y+o.h-11, 22, 22);
+        // resize handle (bottom-right, enlarged for touch) — oculto si el tamaño es automático
+        if(!o.autoSize){
+          ctx.fillStyle='#4FBDBA';
+          ctx.fillRect(o.x+o.w-11, o.y+o.h-11, 22, 22);
+          ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
+          ctx.strokeRect(o.x+o.w-11, o.y+o.h-11, 22, 22);
+        }
         // rotate handle (top-center)
         const hx=o.x+o.w/2, hy=o.y-32;
         ctx.beginPath(); ctx.moveTo(o.x+o.w/2,o.y); ctx.lineTo(hx,hy);
@@ -1212,7 +1297,7 @@
       pendingSnapshot = snapshotState();
       return;
     }
-    if(sel && nearHandle(sel,x,y)){
+    if(sel && !sel.autoSize && nearHandle(sel,x,y)){
       dragMode='resize'; dragStart={x,y};
       objStart={w:sel.w,h:sel.h,x:sel.x,y:sel.y,rotation:sel.rotation||0,cx:sel.x+sel.w/2,cy:sel.y+sel.h/2};
       pendingSnapshot = snapshotState();
@@ -1291,7 +1376,7 @@
         const midX=(t1.clientX+t2.clientX)/2, midY=(t1.clientY+t2.clientY)/2;
         const {x,y} = canvasCoords(midX, midY);
         const loc = toLocal(sel, x, y);
-        overSelected = loc.x>=sel.x && loc.x<=sel.x+sel.w && loc.y>=sel.y && loc.y<=sel.y+sel.h;
+        overSelected = !sel.autoSize && loc.x>=sel.x && loc.x<=sel.x+sel.w && loc.y>=sel.y && loc.y<=sel.y+sel.h;
       }
       if(overSelected){
         pinchState = { startDist: touchDist(t1,t2), startAngle: touchAngle(t1,t2), startW: sel.w, startH: sel.h, startRotation: sel.rotation||0 };
@@ -1353,25 +1438,74 @@
 
   // ================= floating quick toolbar =================
   const floatBar = document.getElementById('floatBar');
+  let floatDragState = null;
+  let floatBarManualPos = null; // {left,top} tras arrastrarla a mano
+  let floatBarPosForId = null;  // a qué objeto corresponde esa posición manual
+  function floatDragMove(clientX, clientY){
+    if(!floatDragState) return;
+    const pw = floatBar.offsetWidth, ph = floatBar.offsetHeight;
+    let left = floatDragState.startLeft + (clientX-floatDragState.startX);
+    let top = floatDragState.startTop + (clientY-floatDragState.startY);
+    left = Math.max(4, Math.min(left, window.innerWidth-pw-4));
+    top = Math.max(4, Math.min(top, window.innerHeight-ph-4));
+    floatBar.style.left = left+'px'; floatBar.style.top = top+'px';
+    floatBarManualPos = {left, top};
+    floatBarPosForId = selectedId;
+  }
+  window.addEventListener('mousemove', e=> floatDragMove(e.clientX, e.clientY));
+  window.addEventListener('mouseup', ()=>{
+    floatDragState=null;
+    const g=document.getElementById('floatBarGrip'); if(g) g.classList.remove('dragging');
+  });
+  window.addEventListener('touchmove', e=>{
+    if(floatDragState && e.touches.length===1){ const t=e.touches[0]; floatDragMove(t.clientX,t.clientY); }
+  }, {passive:true});
+  window.addEventListener('touchend', ()=>{
+    floatDragState=null;
+    const g=document.getElementById('floatBarGrip'); if(g) g.classList.remove('dragging');
+  });
+  function wireFloatBarDrag(){
+    const grip = document.getElementById('floatBarGrip');
+    if(!grip) return;
+    grip.addEventListener('mousedown', e=>{
+      e.preventDefault();
+      const rect = floatBar.getBoundingClientRect();
+      floatDragState = {startX:e.clientX, startY:e.clientY, startLeft:rect.left, startTop:rect.top};
+      grip.classList.add('dragging');
+    });
+    grip.addEventListener('touchstart', e=>{
+      const rect = floatBar.getBoundingClientRect();
+      const t = e.touches[0];
+      floatDragState = {startX:t.clientX, startY:t.clientY, startLeft:rect.left, startTop:rect.top};
+      grip.classList.add('dragging');
+    }, {passive:true});
+  }
   function updateFloatBar(){
     const sel = objects.find(o=>o.id===selectedId);
-    if(!sel){ floatBar.style.display='none'; return; }
+    if(!sel){ floatBar.style.display='none'; floatBarManualPos=null; floatBarPosForId=null; return; }
     const r = toScreenRect(sel);
     floatBar.innerHTML = `
+      <span class="fbGrip" id="floatBarGrip" title="Arrastrar">⠿</span>
       <button id="fb_edit">✏️ Editar</button>
       <button id="fb_up" title="Adelante">↑</button>
       <button id="fb_down" title="Atrás">↓</button>
       <button id="fb_del" title="Eliminar">🗑</button>`;
     floatBar.style.display='flex';
-    let top = r.top - 46; if(top<6) top = r.top+r.height+6;
-    let left = Math.min(Math.max(r.left,6), window.innerWidth-200);
-    floatBar.style.top = top+'px'; floatBar.style.left = left+'px';
+    if(floatBarManualPos && floatBarPosForId===sel.id){
+      floatBar.style.top = floatBarManualPos.top+'px'; floatBar.style.left = floatBarManualPos.left+'px';
+    } else {
+      floatBarManualPos = null;
+      let top = r.top - 46; if(top<6) top = r.top+r.height+6;
+      let left = Math.min(Math.max(r.left,6), window.innerWidth-200);
+      floatBar.style.top = top+'px'; floatBar.style.left = left+'px';
+    }
     document.getElementById('fb_edit').onclick = e=>{ e.stopPropagation(); openPopover(r.left,r.top,sel); };
     document.getElementById('fb_up').onclick = e=>{ e.stopPropagation(); document.getElementById('btnForward').click(); };
     document.getElementById('fb_down').onclick = e=>{ e.stopPropagation(); document.getElementById('btnBackward').click(); };
     document.getElementById('fb_del').onclick = e=>{ e.stopPropagation(); deleteSelected(); };
+    wireFloatBarDrag();
   }
-  function hideFloatBar(){ floatBar.style.display='none'; }
+  function hideFloatBar(){ floatBar.style.display='none'; floatBarManualPos=null; floatBarPosForId=null; }
 
   // ================= WordArt presets =================
   const WORDART_PRESETS = {
@@ -1494,6 +1628,9 @@
     let body = '';
     if(sel.type==='text'){
       body = `
+        <label class="colChk" style="margin-bottom:10px;font-size:12.5px">
+          <input type="checkbox" id="p_autosize" ${sel.autoSize?'checked':''}> Ajustar el tamaño del cuadro automáticamente al texto
+        </label>
         <label class="field">Contenido (admite varias líneas)<textarea id="p_content">${escapeHtml(sel.content)}</textarea></label>
         <p class="hint">Selecciona una palabra o frase arriba para aplicar el formato solo a esa parte. Si no seleccionas nada, se aplica a todo el texto.</p>
         <div class="richRow">
@@ -1647,6 +1784,11 @@
     document.getElementById('p_close').addEventListener('click', closePopover);
     document.getElementById('p_delete').addEventListener('click', deleteSelected);
     if(sel.type==='text'){
+      byId('p_autosize').addEventListener('change', e=>{
+        sel.autoSize = e.target.checked;
+        if(sel.autoSize) computeAutoSize(sel);
+        render();
+      });
       byId('p_content').addEventListener('input', e=>{ sel.content=e.target.value; render(); });
       const contentTa = byId('p_content');
       function applyRich(prop, forcedValue){
