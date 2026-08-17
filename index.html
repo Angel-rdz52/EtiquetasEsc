@@ -36,6 +36,11 @@
         <button class="accent block" id="btnApplySize">Aplicar tamaño</button>
       </fieldset>
       <fieldset>
+        <legend>Textos</legend>
+        <p class="hint">Si algún texto salta de línea aunque sobre espacio, es porque su cuadro no se ajusta solo al contenido.</p>
+        <button type="button" class="small block" id="btnAutoSizeAll">Autoajustar todos los textos al contenido</button>
+      </fieldset>
+      <fieldset>
         <legend>Color de fondo</legend>
         <div id="canvasBgCtl"></div>
       </fieldset>
@@ -90,13 +95,20 @@
   </div>
 
   <div class="sep"></div>
+  <button class="icon" id="btnUndo" title="Deshacer (Ctrl+Z)">↶</button>
+  <button class="icon" id="btnRedo" title="Rehacer (Ctrl+Y)">↷</button>
+  <div class="sep"></div>
+  <button class="icon" id="btnCopy" title="Copiar (Ctrl+C)">⧉</button>
+  <button class="icon" id="btnCut" title="Cortar (Ctrl+X)">✂</button>
+  <button class="icon" id="btnPaste" title="Pegar (Ctrl+V)">📋</button>
+  <div class="sep"></div>
   <button class="icon" id="btnForward" title="Traer adelante">↑</button>
   <button class="icon" id="btnBackward" title="Enviar atrás">↓</button>
   <button class="icon danger" id="btnDelete" title="Eliminar seleccionado">🗑</button>
   <div class="sep"></div>
   <button id="btnSaveTemplate" title="Guardar diseño editable (.json)">💾 Plantilla</button>
-  <button id="btnLoadTemplate" title="Abrir un diseño guardado">📂 Abrir</button>
-  <input type="file" id="templateFileInput" accept=".json,application/json" style="display:none">
+  <label class="fileBtn" id="btnLoadTemplate" for="templateFileInput" title="Abrir un diseño guardado">📂 Abrir</label>
+  <input type="file" id="templateFileInput" class="visually-hidden" accept=".json,application/json">
   <div class="sep"></div>
   <button class="accent" id="btnDownload">⬇ PNG</button>
   <button class="danger" id="btnClear">Vaciar</button>
@@ -127,3 +139,4 @@
 <script src="script.js"></script>
 </body>
 </html>
+
